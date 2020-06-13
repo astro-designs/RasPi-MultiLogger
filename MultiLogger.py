@@ -22,6 +22,7 @@ from microdotphat import write_string, set_decimal, clear, show
 import os
 import subprocess
 from gpiozero import CPUTemperature
+import RPi.GPIO as GPIO
 
 # Import sensor configurations
 import sensors
@@ -40,8 +41,8 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Simple Domoticz data logger')
 
-parser.add_argument('-ip', action='store', dest='IP_Address', default='192.168.1.32',
-                    help='IP Address of Domoticz server (e.g. 192.168.1.32)')
+parser.add_argument('-ip', action='store', dest='IP_Address', default='192.168.1.31',
+                    help='IP Address of Domoticz server (e.g. 192.168.1.31)')
 
 parser.add_argument('-port', action='store', dest='port', default='8085',
                     help='Domoticz listening port (e.g. 8085')
@@ -77,12 +78,17 @@ hdlr.setFormatter(formatter)
 logger.addHandler(hdlr) 
 logger.setLevel(logging.INFO)
 
-# Miscelaneous definitions
+# Miscellaneous definitions
 GET_THROTTLED_CMD = 'vcgencmd get_throttled'
 throttle_uv = 0
 throttle_uv_level = 0
 throttle_readings = 0
 throttle_uv_num = 0
+kWhrs_in = 0
+kWhrs_in_today = 0
+DailyReset = False
+
+GPIO.setmode(GPIO.BCM)
 
 # Sensor configuration...
 LogTitles = sensors.SensorName
@@ -250,6 +256,29 @@ def read_ping(SensorID):
 	
 	return measurement
 
+def electric_in_add(channel):
+	global kWhrs_in, kWhrs_in_today, DailyReset
+	
+	kWhrs_in = round(kWhrs_in + 0.001,3)
+
+	if DailyReset:
+		kWhrs_in_today = 0
+	else:
+		kWhrs_in_today = round(kWhrs_in_today + 0.001,3)
+		
+	print("kWhrs_in_today: ", kWhrs_in_today)
+	print("kWhrs_in: ", kWhrs_in)
+
+		
+def read_electric_daily_import(SensorID):
+	global kWhrs_in_today
+	
+	measurement = kWhrs_in_today
+	print("kWhrs in: ", kWhrs_in_today)
+	
+	return measurement
+
+	
 def read_sensor(SensorID):
 	measurement = -999
 
@@ -274,6 +303,9 @@ def read_sensor(SensorID):
 
 	if SensorType[SensorID] == 'Ping':
 		measurement = read_ping(SensorID)
+	
+	if SensorType[SensorID] == 'kWhrs_in':
+		measurement = read_electric_daily_import(SensorID)
 
 	return measurement
 
@@ -293,8 +325,14 @@ if 'LM75' in SensorType:
 # TrigN config...
 if 'TrigN' in SensorType:
 	print("Using Negative-Edge trigger on pin")
-	
-	
+
+# Electricity config...
+if 'kWhrs_in' in SensorType:
+	for x in range(0, ActiveSensors):
+		if SensorType[x] == 'kWhrs_in':
+			GPIO.setup(int(SensorLoc[x],10), GPIO.IN) #, pull_up_down=GPIO.PUD_UP)
+			GPIO.add_event_detect(int(SensorLoc[x],10), GPIO.FALLING, callback=electric_in_add, bouncetime=500)
+
 # Update LogTitlesString with description of all sensors...
 logTitleString = ""
 for x in range(0, ActiveSensors):
@@ -323,6 +361,7 @@ try:
 	
 	# First reading...
 	Reading = 0
+	prev_TimeNow = time.time()
 	
 	while Reading < NumReadings or NumReadings < 1:
 		TimeNow = time.time()
@@ -337,6 +376,13 @@ try:
 
 		NextMeasurementTime = NextMeasurementTime + MeasurementInterval
 
+		# Reset daily totals
+		if TimeNow <= prev_TimeNow:
+			DailyReset = True
+		else:
+			DailyReset = False
+		prev_TimeNow = TimeNow
+		
 		# Reset average measurements
 		# Note: Averaging is only supported for some types of sensors
 		for x in range(0, ActiveSensors):
