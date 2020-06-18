@@ -85,10 +85,24 @@ throttle_uv = 0
 throttle_uv_level = 0
 throttle_readings = 0
 throttle_uv_num = 0
+
+#Electricity Import (usage)
 Electric_kWhrs_imported_total = 0
+prev_Electric_kWhrs_imported_total = Electric_kWhrs_imported_total
 Electric_kWhrs_imported_today = 0
-SolarPV_kWhrs_gen_total = 34.351
-SolarPV_kWhrs_gen_today = 2.1
+Electric_kWhrs_import_now = 0
+prev_Electric_Time = 0
+
+#Electricity Export
+Electric_kWhrs_exported_total = 0
+Electric_kWhrs_exported_today = 0
+
+# Solar PV
+SolarPV_kWhrs_gen_total = 56.000
+prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
+SolarPV_kWhrs_gen_today = 36.461
+SolarPV_kWhrs_gen_now = 0
+prev_SolarPV_Time = 0
 
 GPIO.setmode(GPIO.BCM)
 
@@ -176,7 +190,7 @@ def DisplayTemp(NextDisplayTime, SensorVal, unitstr):
 	TimeNow = time.time()
 	if TimeNow > NextDisplayTime:
 		NextDisplayTime = NextDisplayTime + DisplayInterval
-		print("Displaying Temperature on MicroDot Phat...")
+		#print("Displaying Temperature on MicroDot Phat...")
 		write_string( "%.1f" % SensorVal + unitstr, kerning=False)
 		show()
 
@@ -258,64 +272,99 @@ def read_ping(SensorID):
 	
 	return measurement
 
+# Interrupt callback routine for increasing Electric import count
 def Electric_import_pulse(channel):
-	global Electric_kWhrs_imported_total, Electric_kWhrs_imported_today, DailyReset
+	global Electric_kWhrs_imported_total, prev_Electric_kWhrs_imported_total, Electric_kWhrs_imported_today, Electric_kWhrs_gen_now, prev_Electric_Time
 	
 	Electric_kWhrs_imported_total = round(Electric_kWhrs_imported_total + 0.001,3)
-
-	if DailyReset:
-		Electric_kWhrs_imported_today = 0
-	else:
-		Electric_kWhrs_imported_today = round(Electric_kWhrs_imported_today + 0.001,3)
+	Electric_kWhrs_imported_today = round(Electric_kWhrs_imported_today + 0.001,3)
+	Electric_Time = time.time()
 		
+	# Reset daily total
+	if time.localtime(Electric_Time).tm_hour < time.localtime(prev_Electric_Time).tm_hour:
+		Electric_kWhrs_imported_today = 0
+
+	if prev_Electric_Time > 0:
+		Electric_kWhrs_import_now = (Electric_kWhrs_imported_total - prev_Electric_kWhrs_imported_total) / ((Electric_Time - prev_Electric_Time) / 3600)
+	
+	prev_Electric_kWhrs_imported_total = Electric_kWhrs_imported_total
+	prev_Electric_Time = Electric_Time
+
 	#print("Electric_kWhrs_imported_today: ", Electric_kWhrs_imported_today)
 	#print("Electric_kWhrs_imported_today: ", Electric_kWhrs_imported_today)
 
+# Interrupt callback routine for increasing SolarPV count
 def SolarPV_gen_pulse(channel):
-	global SolarPV_kWhrs_gen_total, SolarPV_kWhrs_gen_today, DailyReset
+	global SolarPV_kWhrs_gen_total, prev_SolarPV_kWhrs_gen_total, SolarPV_kWhrs_gen_today, SolarPV_kWhrs_gen_now, prev_SolarPV_Time
 	
 	SolarPV_kWhrs_gen_total = round(SolarPV_kWhrs_gen_total + 0.001,3)
-
-	if DailyReset:
-		print("Resetting...")
+	SolarPV_kWhrs_gen_today = round(SolarPV_kWhrs_gen_today + 0.001,3)
+	SolarPV_Time = time.time()
+	
+	# Reset daily total
+	if time.localtime(SolarPV_Time).tm_hour < time.localtime(prev_SolarPV_Time).tm_hour:
 		SolarPV_kWhrs_gen_today = 0
-	else:
-		SolarPV_kWhrs_gen_today = round(SolarPV_kWhrs_gen_today + 0.001,3)
-		
-	#print("SolarPV_kWhrs_gen_today: ", SolarPV_kWhrs_gen_today)
+
+	if prev_SolarPV_Time > 0:
+		SolarPV_kWhrs_gen_now = (SolarPV_kWhrs_gen_total - prev_SolarPV_kWhrs_gen_total) / ((SolarPV_Time - prev_SolarPV_Time) / 3600)
+	
+	prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
+	prev_SolarPV_Time = SolarPV_Time
+	
 	#print("SolarPV_kWhrs_gen_total: ", SolarPV_kWhrs_gen_total)
+	#print("SolarPV_kWhrs_gen_today: ", SolarPV_kWhrs_gen_today)
+	#print("SolarPV_kWhrs_gen_now: ", SolarPV_kWhrs_gen_now)
 		
 def read_Electric_kWhrs_imported_today(SensorID):
 	global Electric_kWhrs_imported_today
 	
+	if DailyReset:
+		Electric_kWhrs_imported_today = 0
+
 	measurement = Electric_kWhrs_imported_today
-	#print("Read kWhrs imported today: ", Electric_kWhrs_imported_today)
+	#print("Read kWhrs imported today: ", measurement)
 	
 	return measurement
 
 def read_Electric_Whrs_imported_today(SensorID):
 	global Electric_kWhrs_imported_today
 	
+	if DailyReset:
+		Electric_kWhrs_imported_today = 0
+
 	measurement = Electric_kWhrs_imported_today * 1000
-	#print("Read Whrs imported today: ", Electric_kWhrs_imported_today * 1000)
+	#print("Read Whrs imported today: ", measurement)
 	
 	return measurement
 
 def read_SolarPV_kWhrs_gen_today(SensorID):
 	global SolarPV_kWhrs_gen_today
 	
+	if DailyReset:
+		SolarPV_kWhrs_gen_today = 0
+
 	measurement = SolarPV_kWhrs_gen_today
-	#print("Whrs in: ", SolarPV_kWhrs_gen_today)
-	#print("kWhrs in: ", SolarPV_kWhrs_gen_today)
+	#print("kWhrs in: ", measurement)
 	
 	return measurement
 	
 def read_SolarPV_Whrs_gen_today(SensorID):
 	global SolarPV_kWhrs_gen_today
 	
+	if DailyReset:
+		SolarPV_kWhrs_gen_today = 0
+
 	measurement = SolarPV_kWhrs_gen_today * 1000
-	#print("Whrs in: ", SolarPV_kWhrs_gen_today * 1000)
-	#print("kWhrs in: ", SolarPV_kWhrs_gen_today)
+	#print("Whrs in: ", measurement)
+	
+	return measurement
+	
+def read_SolarPV_kW_gen_now(SensorID):
+	global SolarPV_kWhrs_gen_now
+	
+	measurement = SolarPV_kWhrs_gen_now
+	
+	#print("kSolarPV_kW_gen_now: ", measurement)
 	
 	return measurement
 	
@@ -358,6 +407,10 @@ def read_sensor(SensorID):
 
 	if SensorType[SensorID] == 'SolarPV_Whrs_gen_today':
 		measurement = read_SolarPV_Whrs_gen_today(SensorID)
+		
+	if SensorType[SensorID] == 'SolarPV_W':
+		measurement = read_SolarPV_kW_gen_now(SensorID)
+		
 
 	return measurement
 
@@ -424,20 +477,13 @@ try:
 		# Pause between measurements
 		while TimeNow < NextMeasurementTime:
 			# Check CPU throttle status while waiting...
-			print ("Reading throttle...")
+			#print ("Reading throttle...")
 			ThrottleMonitor()
 			time.sleep(0.2)
 			TimeNow = time.time()
 
 		NextMeasurementTime = NextMeasurementTime + MeasurementInterval
 
-		# Reset daily totals
-		if time.localtime(TimeNow).tm_hour < time.localtime(prev_TimeNow).tm_hour:
-			DailyReset = True
-		else:
-			DailyReset = False
-		prev_TimeNow = TimeNow
-		
 		# Reset average measurements
 		# Note: Averaging is only supported for some types of sensors
 		for x in range(0, ActiveSensors):
@@ -501,6 +547,8 @@ try:
 		# NumReadings countdown...
 		if Reading < NumReadings:
 			Reading = Reading + 1
+			
+		prev_TimeNow = TimeNow
 	
 	logger.info('Logging completed.')
 	
