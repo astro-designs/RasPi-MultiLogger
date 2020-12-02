@@ -42,8 +42,8 @@ import argparse
 
 parser = argparse.ArgumentParser(description='Simple Domoticz data logger')
 
-parser.add_argument('-ip', action='store', dest='IP_Address', default='192.168.1.31',
-                    help='IP Address of Domoticz server (e.g. 192.168.1.31)')
+parser.add_argument('-ip', action='store', dest='IP_Address', default='192.168.1.32',
+                    help='IP Address of Domoticz server (e.g. 192.168.1.32)')
 
 parser.add_argument('-port', action='store', dest='port', default='8085',
                     help='Domoticz listening port (e.g. 8085')
