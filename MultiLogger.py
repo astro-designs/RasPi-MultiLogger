@@ -9,6 +9,7 @@
 # Added support for monitoring CPU under-voltage triggered throttle
 # Adding support for GPIO trigger counter but not yet finished or supported
 # Added support for a Ping function to monitor network connectivity
+# 03/09/20: Adding support to record / monitor electricity energy consumption at a set time
 
 import logging
 import time
@@ -87,10 +88,12 @@ throttle_readings = 0
 throttle_uv_num = 0
 
 #Electricity Import (usage)
-Electric_kWhrs_imported_total = 0
-prev_Electric_kWhrs_imported_total = Electric_kWhrs_imported_total
-Electric_kWhrs_imported_today = 0
-Electric_kWhrs_import_now = 0
+Electric_kWhrs_import_total = 0
+Electric_kWhrs_import_T1 = 0
+prev_Electric_kWhrs_import_total = Electric_kWhrs_import_total
+Electric_kWhrs_import_today = 0
+Electric_kW_import_now = 0
+prev_Electric_kW_import_now = 0
 prev_Electric_Time = 0
 
 #Electricity Export
@@ -100,8 +103,9 @@ Electric_kWhrs_exported_today = 0
 # Solar PV
 SolarPV_kWhrs_gen_total = 56.000
 prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
-SolarPV_kWhrs_gen_today = 36.461
-SolarPV_kWhrs_gen_now = 0
+SolarPV_kWhrs_gen_today = 0
+SolarPV_kW_gen_now = 0
+prev_SolarPV_kW_gen_now = 0
 prev_SolarPV_Time = 0
 
 GPIO.setmode(GPIO.BCM)
@@ -274,28 +278,34 @@ def read_ping(SensorID):
 
 # Interrupt callback routine for increasing Electric import count
 def Electric_import_pulse(channel):
-	global Electric_kWhrs_imported_total, prev_Electric_kWhrs_imported_total, Electric_kWhrs_imported_today, Electric_kWhrs_gen_now, prev_Electric_Time
+	global Electric_kWhrs_import_T1, Electric_kWhrs_import_total, prev_Electric_kWhrs_import_total, Electric_kWhrs_import_today, Electric_kW_import_now, prev_Electric_kW_import_now, prev_Electric_Time
 	
-	Electric_kWhrs_imported_total = round(Electric_kWhrs_imported_total + 0.001,3)
-	Electric_kWhrs_imported_today = round(Electric_kWhrs_imported_today + 0.001,3)
+	Electric_kWhrs_import_total = round(Electric_kWhrs_import_total + 0.001,3)
+	Electric_kWhrs_import_today = round(Electric_kWhrs_import_today + 0.001,3)
 	Electric_Time = time.time()
-		
+
+	# Track daily total untip 6AM to measure 
+	if time.localtime(Electric_Time).tm_hour < 6:
+		Electric_kWhrs_import_T1 = Electric_kWhrs_import_today
+	
 	# Reset daily total
 	if time.localtime(Electric_Time).tm_hour < time.localtime(prev_Electric_Time).tm_hour:
-		Electric_kWhrs_imported_today = 0
+		Electric_kWhrs_import_today = 0
+		Electric_kWhrs_import_T1 = 0
 
 	if prev_Electric_Time > 0:
-		Electric_kWhrs_import_now = (Electric_kWhrs_imported_total - prev_Electric_kWhrs_imported_total) / ((Electric_Time - prev_Electric_Time) / 3600)
+		Electric_kW_import_now = (Electric_kWhrs_import_total - prev_Electric_kWhrs_import_total) / ((Electric_Time - prev_Electric_Time) / 3600)
 	
-	prev_Electric_kWhrs_imported_total = Electric_kWhrs_imported_total
+	prev_Electric_kWhrs_import_total = Electric_kWhrs_import_total
 	prev_Electric_Time = Electric_Time
 
-	#print("Electric_kWhrs_imported_today: ", Electric_kWhrs_imported_today)
-	#print("Electric_kWhrs_imported_today: ", Electric_kWhrs_imported_today)
+	#print("Electric import pulse detected")
+	#print("Electric_kWhrs_import_today: ", Electric_kWhrs_import_today)
+	#print("Electric_kWhrs_import_today: ", Electric_kWhrs_import_today)
 
 # Interrupt callback routine for increasing SolarPV count
 def SolarPV_gen_pulse(channel):
-	global SolarPV_kWhrs_gen_total, prev_SolarPV_kWhrs_gen_total, SolarPV_kWhrs_gen_today, SolarPV_kWhrs_gen_now, prev_SolarPV_Time
+	global SolarPV_kWhrs_gen_total, prev_SolarPV_kWhrs_gen_total, SolarPV_kWhrs_gen_today, SolarPV_kW_gen_now, prev_SolarPV_Time
 	
 	SolarPV_kWhrs_gen_total = round(SolarPV_kWhrs_gen_total + 0.001,3)
 	SolarPV_kWhrs_gen_today = round(SolarPV_kWhrs_gen_today + 0.001,3)
@@ -306,37 +316,63 @@ def SolarPV_gen_pulse(channel):
 		SolarPV_kWhrs_gen_today = 0
 
 	if prev_SolarPV_Time > 0:
-		SolarPV_kWhrs_gen_now = (SolarPV_kWhrs_gen_total - prev_SolarPV_kWhrs_gen_total) / ((SolarPV_Time - prev_SolarPV_Time) / 3600)
+		SolarPV_kW_gen_now = (SolarPV_kWhrs_gen_total - prev_SolarPV_kWhrs_gen_total) / ((SolarPV_Time - prev_SolarPV_Time) / 3600)
 	
 	prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
 	prev_SolarPV_Time = SolarPV_Time
 	
+	#print("SolarPV gen pulse detected")
 	#print("SolarPV_kWhrs_gen_total: ", SolarPV_kWhrs_gen_total)
 	#print("SolarPV_kWhrs_gen_today: ", SolarPV_kWhrs_gen_today)
-	#print("SolarPV_kWhrs_gen_now: ", SolarPV_kWhrs_gen_now)
+	#print("SolarPV_kW_gen_now: ", SolarPV_kW_gen_now)
 		
-def read_Electric_kWhrs_imported_today(SensorID):
-	global Electric_kWhrs_imported_today
+def read_Electric_kWhrs_import_today(SensorID):
+	global Electric_kWhrs_import_today
 	
 	if DailyReset:
-		Electric_kWhrs_imported_today = 0
+		Electric_kWhrs_import_today = 0
 
-	measurement = Electric_kWhrs_imported_today
+	measurement = Electric_kWhrs_import_today
 	#print("Read kWhrs imported today: ", measurement)
 	
 	return measurement
 
-def read_Electric_Whrs_imported_today(SensorID):
-	global Electric_kWhrs_imported_today
+def read_Electric_Whrs_import_today(SensorID):
+	global Electric_kWhrs_import_today
 	
 	if DailyReset:
-		Electric_kWhrs_imported_today = 0
+		Electric_kWhrs_import_today = 0
 
-	measurement = Electric_kWhrs_imported_today * 1000
+	measurement = Electric_kWhrs_import_today * 1000
 	#print("Read Whrs imported today: ", measurement)
 	
 	return measurement
 
+def read_Electric_Whrs_import_T1(SensorID):
+	global Electric_kWhrs_import_T1
+	
+	if DailyReset:
+		Electric_kWhrs_import_T1 = 0
+
+	measurement = Electric_kWhrs_import_T1 * 1000
+	#print("Read Whrs imported today: ", measurement)
+	
+	return measurement
+
+def read_Electric_kW_import_now(SensorID):
+	global Electric_kW_import_now, prev_Electric_kW_import_now
+	
+	if Electric_kW_import_now == prev_Electric_kW_import_now:
+		Electric_kW_import_now = 0
+		prev_Electric_kW_import_now = 0
+
+	measurement = Electric_kW_import_now
+	prev_Electric_kW_import_now = Electric_kW_import_now
+	
+	print("Electric_kW_import_now: ", measurement)
+	
+	return measurement
+	
 def read_SolarPV_kWhrs_gen_today(SensorID):
 	global SolarPV_kWhrs_gen_today
 	
@@ -360,11 +396,16 @@ def read_SolarPV_Whrs_gen_today(SensorID):
 	return measurement
 	
 def read_SolarPV_kW_gen_now(SensorID):
-	global SolarPV_kWhrs_gen_now
+	global SolarPV_kW_gen_now, prev_SolarPV_kW_gen_now
 	
-	measurement = SolarPV_kWhrs_gen_now
+	if SolarPV_kW_gen_now == prev_SolarPV_kW_gen_now:
+		SolarPV_kW_gen_now = 0
+		prev_SolarPV_kW_gen_now = 0
+
+	measurement = SolarPV_kW_gen_now
+	prev_SolarPV_kW_gen_now = SolarPV_kW_gen_now
 	
-	#print("kSolarPV_kW_gen_now: ", measurement)
+	print("kSolarPV_kW_gen_now: ", measurement)
 	
 	return measurement
 	
@@ -398,7 +439,16 @@ def read_sensor(SensorID):
 
 	if SensorType[SensorID] == 'Electric_kWhrs_import_total':
 		measurement = read_Electric_kWhrs_import_total(SensorID)
-
+		
+	if SensorType[SensorID] == 'Electric_Whrs_import_today':
+		measurement = read_Electric_Whrs_import_today(SensorID)
+		
+	if SensorType[SensorID] == 'Electric_Whrs_import_T1':
+		measurement = read_Electric_Whrs_import_T1(SensorID)
+		
+	if SensorType[SensorID] == 'Electric_kW':
+		measurement = read_Electric_kW_import_now(SensorID)		
+		
 	if SensorType[SensorID] == 'SolarPV_kWhrs_gen_today':
 		measurement = read_SolarPV_kWhrs_gen_today(SensorID)
 
@@ -431,10 +481,16 @@ if 'LM75' in SensorType:
 if 'TrigN' in SensorType:
 	print("Using Negative-Edge trigger on pin")
 
-# Electricity config...
+# SolarPV config...
 # Assumes the I/O pin is connected directly to the output of the photo detector stuck to the front of the electricity meter
 # and that the output is pulled up to around 3.3V within the sensor monitoring module.
 # Recommend a resistor (say, 1kR) is connected in-line with the connection to the GPIO pin to protect the Pi
+if 'Electric_Whrs_import_today' in SensorType:
+	for x in range(0, ActiveSensors):
+		if SensorType[x] == 'Electric_Whrs_import_today':
+			GPIO.setup(int(SensorLoc[x],10), GPIO.IN, pull_up_down=GPIO.PUD_UP) # Add pull-up here only when testing without the photo-sensor attached
+			GPIO.add_event_detect(int(SensorLoc[x],10), GPIO.FALLING, callback=Electric_import_pulse, bouncetime=500)
+
 if 'SolarPV_Whrs_gen_today' in SensorType:
 	for x in range(0, ActiveSensors):
 		if SensorType[x] == 'SolarPV_Whrs_gen_today':
