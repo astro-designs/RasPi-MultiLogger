@@ -162,7 +162,7 @@ Press Ctrl+C to exit.
 """)
 
 logString = "Log file: " + timestr
-DebugLog(logString,0,0)
+DebugLog(logString,0,1)
 
 logString = "DebugLevel level: " + str(DebugLevel)
 DebugLog(logString,1,1)
@@ -170,7 +170,7 @@ DebugLog(logString,1,1)
 logString = "LogLevel level: " + str(LogLevel)
 DebugLog(logString,1,1)
     
-DebugLog ("Starting Logger...", 0, 0)
+DebugLog ("Starting Logger...", 0, 1)
 
 # Define a function to monitor the throttle status...
 def ThrottleMonitor():
@@ -199,17 +199,17 @@ def LogData(NextLogTime, logTitleString, logString, SensorVal):
 		NextLogTime = NextLogTime + LogInterval
 		
         # Log to webhook...
-		#DebugLog ("Logging to webhook...", 0, 0)
+		#DebugLog ("Logging to webhook...", 1, 1)
 		#r = requests.post('https://maker.ifttt.com/trigger/RasPi_LogTemp/with/key/'+IFTTT_KEY, params={"value1":logTitleString,"value2":logString,"value3":"none"})
 		
 		# Log to Domiticz server...
-		DebugLog ("Logging to Domoticz...", 0, 0)
+		DebugLog ("Logging to Domoticz...", 1, 1)
 		for x in range(0, ActiveSensors):
 			if DomoticzIDX[x] != 'x':
 				domoticz.LogToDomoticz(DomoticzIDX[x], SensorVal[x])
 
 		# Log to file...
-		DebugLog (logString, 999, 0)
+		DebugLog (logString, 999, 1)
 	
 	return NextLogTime
 
@@ -218,7 +218,7 @@ def DisplayData(NextDisplayTime, SensorVal, unitstr):
 	TimeNow = time.time()
 	if TimeNow > NextDisplayTime:
 		NextDisplayTime = NextDisplayTime + DisplayInterval
-		DebugLog ("Displaying Temperature on MicroDot Phat...", 0, 0)
+		DebugLog ("Displaying Temperature on MicroDot Phat...", 1, 1)
 		write_string( "%.1f" % SensorVal + unitstr, kerning=False)
 		show()
 
@@ -472,7 +472,7 @@ def read_RPICT3V1_MainsElectricityVoltage(SensorID):
         
         timeout = timeout - 1
 
-    print("RPICT3V1_data length: ", len(RPICT3V1_data))
+    #print("RPICT3V1_data length: ", len(RPICT3V1_data))
     
     # Check that a read error or timeout hasn't occured
     if (len(RPICT3V1_data) == 16 and NodeID == '11') and timeout > 0:
@@ -718,7 +718,7 @@ logTitleString = ""
 for x in range(0, ActiveSensors):
 	logTitleString = logTitleString + LogTitles[x] + ";"
 
-DebugLog (logTitleString, 0, 0)
+DebugLog (logTitleString, 1, 1)
 
 ############################################################
 # Main program loop
@@ -750,7 +750,7 @@ try:
 		# Pause between measurements
 		while TimeNow < NextMeasurementTime:
 			# Check CPU throttle status while waiting...
-			if DebugLevel > 2: print ("Reading throttle...")
+			DebugLog("Reading throttle...",3,999)
 			ThrottleMonitor()
 			time.sleep(0.2)
 			TimeNow = time.time()
@@ -784,7 +784,7 @@ try:
 			# Check for low warning
 			if SensorReading[x] < LowWarning[x]:
 				if LowWarningIssued[x] == False:
-					if DebugLevel > -1: logger.info('Low warning!')
+					DebugLog("Low warning!",999,1)
 					# Issue Warning via IFTTT...
 					#r = requests.post('https://maker.ifttt.com/trigger/Water_low_temp/with/key/' + IFTTT_KEY, params={"value1":"none","value2":"none","value3":"none"})
 					LowWarningIssued[x] = True
@@ -793,7 +793,7 @@ try:
 			# Check for high warning
 			if SensorReading[x] > HighWarning[x]:
 				if HighWarningIssued[x] == False:
-					if DebugLevel > -1: logger.info('High warning!')
+					DebugLog("High warning!",999,1)
 					# Issue Warning via IFTTT...
 					#r = requests.post('https://maker.ifttt.com/trigger/Water_low_temp/with/key/' + IFTTT_KEY, params={"value1":"none","value2":"none","value3":"none"})
 					HighWarningIssued[x] = True
@@ -823,16 +823,14 @@ try:
 			
 		prev_TimeNow = TimeNow
 	
-	if LogLevel > 0: logger.info('Logging completed.')
+	DebugLog ("Logging completed.", 999, 1)
 	
 # If you press CTRL+C, cleanup and stop
 except KeyboardInterrupt:
-	if LogLevel > 0: logger.info('Keyboard Interrupt (ctrl-c) detected - exiting program loop')
-	print("Keyboard Interrupt (ctrl-c) detected - exiting program loop")
+	DebugLog ("Keyboard Interrupt (ctrl-c) detected - exiting program loop", 0, 1)
 
 finally:
-	if LogLevel > 0: logger.info('Closing data logger')
-	print("Closing data logger")
+	DebugLog ("Closing data logger", 0, 1)
 
 	
 	
