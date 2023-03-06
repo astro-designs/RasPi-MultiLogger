@@ -729,7 +729,7 @@ try:
 	print("Measurement Interval: ", MeasurementInterval)
 	print("Log Interval: ", LogInterval)
 	print("Display Interval: ", DisplayInterval)
-	print("Multi-format data logger running...")
+	DebugLog("Multi-function data logger running...",0,0)
 
 	# Set first LogTime
 	NextLogTime = time.time() + LogInterval
