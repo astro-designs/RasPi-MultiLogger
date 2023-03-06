@@ -10,43 +10,39 @@
 # Adding support for GPIO trigger counter but not yet finished or supported
 # Added support for a Ping function to monitor network connectivity
 # 03/09/20: Adding support to record / monitor electricity energy consumption at a set time
+# 17/04/22: Adding support for RPICT3V1 Current & Voltage sensors
+#           Moving Domiticz routines to external library
 
 import logging
 import time
 from datetime import datetime
 import LM75
 import sys
-import urllib
-import urllib2
 import requests
 from microdotphat import write_string, set_decimal, clear, show
 import os
 import subprocess
 from gpiozero import CPUTemperature
 import RPi.GPIO as GPIO
+import argparse
+import serial
+
+# import sensor interface functions for TBD...
+
+# Import sensor interface functions for RPICT3V1
+#import RPICT3V1
+
+# Import Domoticz logging functions
+import domoticz
 
 # Import sensor configurations
 import sensors
 
-# Note - enable 1-wire interface using raspi-config
-# Note - Once enabled, run (once):
-
-# IFTTT Key definition
-# Save your IFTTT key to key.py
-# or just define IFTTT_KEY somewhere inside this file
-# example key.py:
-# IFTTT_KEY = "randomstringofcharacters..."
+# Import authentication keys
 from key import IFTTT_KEY
 
-import argparse
-
-parser = argparse.ArgumentParser(description='Simple Domoticz data logger')
-
-parser.add_argument('-ip', action='store', dest='IP_Address', default='192.168.1.32',
-                    help='IP Address of Domoticz server (e.g. 192.168.1.32)')
-
-parser.add_argument('-port', action='store', dest='port', default='8085',
-                    help='Domoticz listening port (e.g. 8085')
+# Parse any arguments
+parser = argparse.ArgumentParser(description='Simple Multi-function Data Logger')
 
 parser.add_argument('-NumReadings', action='store', dest='NumReadings', default=0,
                     help='Number of readings to log')
@@ -60,15 +56,25 @@ parser.add_argument('-NumAverages', action='store', dest='NumAverages', default=
 parser.add_argument('-DisplayInterval', action='store', dest='DisplayInterval', default=10,
                     help='Display interval in seconds (e.g. 30)')
 
+parser.add_argument('-DebugLevel', action='store', dest='DebugLevel', default=0,
+                    help='Configures debug functions (0 = no debug)')
+
+parser.add_argument('-LogLevel', action='store', dest='LogLevel', default=0,
+                    help='Configures log functions (0 = no logging)')
+
 arguments = parser.parse_args()
 
 # Read arguments...
-IP_Address = arguments.IP_Address
-port = arguments.port
 NumReadings = int(arguments.NumReadings)
 LogInterval = int(arguments.LogInterval)
 NumAverages = int(arguments.NumAverages)
 DisplayInterval = int(arguments.DisplayInterval)
+DebugLevel = int(arguments.DebugLevel)
+LogLevel = int(arguments.LogLevel)
+
+def DebugLog(logString, DebugThreshold = 0, LogThreshold = 0):
+    if DebugLevel >= DebugThreshold: print(logString)
+    if LogLevel >= LogThreshold: logger.info(logString)
 
 # Setup Log to file function
 timestr = 'logs/' + time.strftime("%B-%dth--%I-%M-%S%p") + '.log'
@@ -78,6 +84,9 @@ formatter = logging.Formatter('%(asctime)s %(levelname)s %(message)s')
 hdlr.setFormatter(formatter)
 logger.addHandler(hdlr) 
 logger.setLevel(logging.INFO)
+
+# Setup serial
+ser = serial.Serial('/dev/ttyAMA0', 38400)
 
 # Miscellaneous definitions
 DailyReset = False
@@ -100,6 +109,9 @@ prev_Electric_Time = 0
 Electric_kWhrs_exported_total = 0
 Electric_kWhrs_exported_today = 0
 
+#RPICT3V1
+RPICT3V1_data = ""
+
 # Solar PV
 SolarPV_kWhrs_gen_total = 56.000
 prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
@@ -108,12 +120,21 @@ SolarPV_kW_gen_now = 0
 prev_SolarPV_kW_gen_now = 0
 prev_SolarPV_Time = 0
 
+#RPM
+RPM_now = 0
+prev_RPM_Time = 0
+Dist_m_today = 0
+prev_Dist_m_today = 0
+
 GPIO.setmode(GPIO.BCM)
 
 # Sensor configuration...
 LogTitles = sensors.SensorName
 SensorType = sensors.SensorType
 SensorLoc = sensors.SensorLoc
+Sensor_A = sensors.Sensor_A
+Sensor_B = sensors.Sensor_B
+Sensor_C = sensors.Sensor_C
 TPins = sensors.SensorLoc
 HighWarning = sensors.HighWarning
 HighReset = sensors.HighReset
@@ -132,7 +153,7 @@ HighWarningIssued = [False, False, False, False, False, False, False, False, Fal
 
 print("""RasPi Multi-Function Data Monitor / Logger
 By Mark Cantrill @AstroDesignsLtd
-Measure and logs temperature from external DS18B20 1-wire temperature sensor or LM75
+Measure and logs data from a variety of sensors and functions
 Logs the data to Domoticz server
 Optionally displays data on a MicroDot pHAT
 Can optionally issues a warning to IFTTT 
@@ -140,28 +161,26 @@ Can optionally issues a warning to IFTTT
 Press Ctrl+C to exit.
 """)
 
-logger.info('Starting Logger...')
+logString = "Log file: " + timestr
+DebugLog(logString,0,0)
 
-# Define function to log data to Domoticz server...
-def LogToDomoticz(idx, SensorVal):
-	url = 'http://' + IP_Address + ':' + port + '/json.htm?type=command&param=udevice&nvalue=0&idx='+idx+'&svalue='+str(SensorVal)
-	try:
-		request = urllib2.Request(url)
-		response = urllib2.urlopen(request)
-		print('Logged ' + str(SensorVal) + ' to Domoticz ID ' + idx)
-	except urllib2.HTTPError, e:
-		logger.info(e.code)
-		print e.code;
-	except urllib2.URLError, e:
-		logger.info(e.args)
-		print e.args;
+logString = "DebugLevel level: " + str(DebugLevel)
+DebugLog(logString,1,1)
 
+logString = "LogLevel level: " + str(LogLevel)
+DebugLog(logString,1,1)
+    
+DebugLog ("Starting Logger...", 0, 0)
 
 # Define a function to monitor the throttle status...
 def ThrottleMonitor():
 	global throttle_readings, throttle_uv_num, throttle_uv, throttle_uv_level
 	throttle_output = subprocess.check_output(GET_THROTTLED_CMD, shell=True)
-	throttle_status = int(throttle_output.split('=')[1], 0)
+	if DebugLevel > 3: print("throttle_output: ", throttle_output)
+	throttle_status_str = throttle_output.decode().split('=')
+	if DebugLevel > 3: print("throttle_status_str: ", throttle_status_str)
+	throttle_status = int(throttle_status_str[1].strip(), 0)
+	if DebugLevel > 3: print("throttle_status: ", throttle_status)
 	throttle_readings = throttle_readings + 1
 	if throttle_status & 1:
 		throttle_uv = 1
@@ -174,27 +193,32 @@ def ThrottleMonitor():
 
 
 # Define function to log data...
-def LogTemp(NextLogTime, logTitleString, logString, SensorVal):
+def LogData(NextLogTime, logTitleString, logString, SensorVal):
 	TimeNow = time.time()
 	if TimeNow > NextLogTime:
 		NextLogTime = NextLogTime + LogInterval
-		# Log to webhook...
-		#print("Logging Temperature to webhook...")
+		
+        # Log to webhook...
+		#DebugLog ("Logging to webhook...", 0, 0)
 		#r = requests.post('https://maker.ifttt.com/trigger/RasPi_LogTemp/with/key/'+IFTTT_KEY, params={"value1":logTitleString,"value2":logString,"value3":"none"})
 		
-		print("Logging to Domoticz...")
+		# Log to Domiticz server...
+		DebugLog ("Logging to Domoticz...", 0, 0)
 		for x in range(0, ActiveSensors):
 			if DomoticzIDX[x] != 'x':
-				LogToDomoticz(DomoticzIDX[x], SensorVal[x])
+				domoticz.LogToDomoticz(DomoticzIDX[x], SensorVal[x])
 
+		# Log to file...
+		DebugLog (logString, 999, 0)
+	
 	return NextLogTime
 
 # Define function to display temperature on MicroDot Phat...
-def DisplayTemp(NextDisplayTime, SensorVal, unitstr):
+def DisplayData(NextDisplayTime, SensorVal, unitstr):
 	TimeNow = time.time()
 	if TimeNow > NextDisplayTime:
 		NextDisplayTime = NextDisplayTime + DisplayInterval
-		#print("Displaying Temperature on MicroDot Phat...")
+		DebugLog ("Displaying Temperature on MicroDot Phat...", 0, 0)
 		write_string( "%.1f" % SensorVal + unitstr, kerning=False)
 		show()
 
@@ -202,6 +226,7 @@ def DisplayTemp(NextDisplayTime, SensorVal, unitstr):
 
 def read_temp_CPU():
 	measurement = CPUTemperature()
+	measurement = round(measurement, 1)
 	return measurement
 
 # Define function to read one-wire temperature sensors...
@@ -232,6 +257,8 @@ def read_temp_LM75(SensorID):
 		measurement = temp_raw - 256
 	else:
 		measurement = temp_raw
+	
+	measurement = round(measurement, 1)
 	return measurement
 
 def read_temp_TPin(SensorID):
@@ -261,18 +288,13 @@ def read_ping(SensorID):
 
 	out, err = res.communicate()
 
-	#print(address + ": Prev Success = " + str(SensorReading[SensorID]) + " %")
-
 	if "ttl=" in out:
 		SensorReading[SensorID] = min(SensorReading[SensorID] + 1,100)
-		#print (address + ": Ping ok ")
 	else:
 		SensorReading[SensorID] = max(SensorReading[SensorID] - 1,0)
-		#print (address + ": Ping failed ")
 
-	#print(address + ": Success = " + str(SensorReading[SensorID]) + " %")
-	
 	measurement = SensorReading[SensorID]
+	#measurement = round(measurement, 0)
 	
 	return measurement
 
@@ -299,9 +321,7 @@ def Electric_import_pulse(channel):
 	prev_Electric_kWhrs_import_total = Electric_kWhrs_import_total
 	prev_Electric_Time = Electric_Time
 
-	#print("Electric import pulse detected")
-	#print("Electric_kWhrs_import_today: ", Electric_kWhrs_import_today)
-	#print("Electric_kWhrs_import_today: ", Electric_kWhrs_import_today)
+	DebugLog ("Electric import/export pulse detected", 1, 1)
 
 # Interrupt callback routine for increasing SolarPV count
 def SolarPV_gen_pulse(channel):
@@ -321,10 +341,7 @@ def SolarPV_gen_pulse(channel):
 	prev_SolarPV_kWhrs_gen_total = SolarPV_kWhrs_gen_total
 	prev_SolarPV_Time = SolarPV_Time
 	
-	#print("SolarPV gen pulse detected")
-	#print("SolarPV_kWhrs_gen_total: ", SolarPV_kWhrs_gen_total)
-	#print("SolarPV_kWhrs_gen_today: ", SolarPV_kWhrs_gen_today)
-	#print("SolarPV_kW_gen_now: ", SolarPV_kW_gen_now)
+	DebugLog ("SolarPV gen pulse detected", 1, 1)
 		
 def read_Electric_kWhrs_import_today(SensorID):
 	global Electric_kWhrs_import_today
@@ -333,7 +350,10 @@ def read_Electric_kWhrs_import_today(SensorID):
 		Electric_kWhrs_import_today = 0
 
 	measurement = Electric_kWhrs_import_today
-	#print("Read kWhrs imported today: ", measurement)
+	measurement = round(measurement, 3)
+
+	logString = "Read kWhrs imported today: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 
@@ -344,7 +364,10 @@ def read_Electric_Whrs_import_today(SensorID):
 		Electric_kWhrs_import_today = 0
 
 	measurement = Electric_kWhrs_import_today * 1000
-	#print("Read Whrs imported today: ", measurement)
+	measurement = round(measurement, 0)
+
+	logString = "Read Whrs imported today: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 
@@ -355,7 +378,10 @@ def read_Electric_Whrs_import_T1(SensorID):
 		Electric_kWhrs_import_T1 = 0
 
 	measurement = Electric_kWhrs_import_T1 * 1000
-	#print("Read Whrs imported today: ", measurement)
+	measurement = round(measurement, 0)
+
+	logString = "Read Whrs imported today: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 
@@ -369,7 +395,8 @@ def read_Electric_kW_import_now(SensorID):
 	measurement = Electric_kW_import_now
 	prev_Electric_kW_import_now = Electric_kW_import_now
 	
-	print("Electric_kW_import_now: ", measurement)
+	logString = "Electric_kW_import_now: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 	
@@ -380,7 +407,10 @@ def read_SolarPV_kWhrs_gen_today(SensorID):
 		SolarPV_kWhrs_gen_today = 0
 
 	measurement = SolarPV_kWhrs_gen_today
-	#print("kWhrs in: ", measurement)
+	measurement = round(measurement, 3)
+
+	logString = "SolarPV_kWhrs_gen_today: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 	
@@ -391,7 +421,10 @@ def read_SolarPV_Whrs_gen_today(SensorID):
 		SolarPV_kWhrs_gen_today = 0
 
 	measurement = SolarPV_kWhrs_gen_today * 1000
-	#print("Whrs in: ", measurement)
+	measurement = round(measurement, 0)
+
+	logString = "SolarPV_Whrs_gen_today: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
 	
@@ -404,11 +437,161 @@ def read_SolarPV_kW_gen_now(SensorID):
 
 	measurement = SolarPV_kW_gen_now
 	prev_SolarPV_kW_gen_now = SolarPV_kW_gen_now
+	measurement = round(measurement, 3)
 	
-	print("kSolarPV_kW_gen_now: ", measurement)
+	logString = "SolarPV_kW_gen_now: " + str(measurement)
+	DebugLog (logString, 1, 1)
 	
 	return measurement
+
+def read_RPICT3V1_MainsElectricityVoltage(SensorID):
+    
+    global RPICT3V1_data
+    
+    # Buffer is capturing constantly so mush be flushed before reading the next line
+    # in order to ensure we capture the latest data
+    ser.flushInput()
+    
+    # Read line from serial (assumes RPICT3V1 is running and 
+    RPICT3V1_data = ""
+    NodeID = 0
+    timeout = 10
+    while (len(RPICT3V1_data) < 16 or NodeID != '11') and timeout > 0: 
+        RPICT3V1_data = ser.readline()
+        logString = "RPICT3V1 RX Data: " + str(RPICT3V1_data)
+        DebugLog (logString, 2, 2)
+
+        # Remove the trailing carriage return line feed...
+        RPICT3V1_data = RPICT3V1_data[:-2]
+
+        # Decode data...
+        RPICT3V1_data = RPICT3V1_data.decode().split(' ')
+
+        # Extract NodeID for to validate dataset...
+        NodeID = RPICT3V1_data[0]
+        
+        timeout = timeout - 1
+
+    print("RPICT3V1_data length: ", len(RPICT3V1_data))
+    
+    # Check that a read error or timeout hasn't occured
+    if (len(RPICT3V1_data) == 16 and NodeID == '11') and timeout > 0:
+        measurement = float(RPICT3V1_data[int(SensorLoc[SensorID])])
+    else:
+        measurement = 0.0
+        
+    measurement = round(measurement, 0)
+    
+    logString = "Mains Electricity Voltage (V): " + str(measurement)
+    DebugLog (logString, 1, 1)
+
+    return measurement
+
+def read_RPICT3V1_SCT013_100A_1(SensorID):
+    
+    global RPICT3V1_data
+    
+    measurement = float(RPICT3V1_data[int(SensorLoc[SensorID])])
+    measurement = round(measurement, 3)
+    
+    logString = "Mains Electricity Current (A): " + str(measurement)
+    DebugLog (logString, 1, 1)
+    
+    return measurement
 	
+def read_RPICT3V1_ActiveImport(SensorID):    
+    
+    global RPICT3V1_data
+
+    measurement = float(RPICT3V1_data[int(SensorLoc[SensorID])])
+    
+    # Check if current flow indicates export, then clamp to zero
+    if measurement < 0:
+        measurement = 0
+    measurement = round(measurement, 3)
+    
+    logString = "Mains Electricity Import (W): " + str(measurement)
+    DebugLog (logString, 1, 1)
+    
+    return measurement
+	
+def read_RPICT3V1_ActiveExport(SensorID):
+    
+    global RPICT3V1_data
+
+    measurement = float(RPICT3V1_data[int(SensorLoc[SensorID])])
+
+    # Check if current flow indicates import, then clamp to zero
+    if measurement > 0:
+        measurement = 0
+    # otherwise invert measurement
+    else:
+        measurement = 0 - measurement
+    measurement = round(measurement, 3)
+    
+    logString = "Mains Electricity Export (W): " + str(measurement)
+    DebugLog (logString, 1, 1)
+    
+    return measurement
+	
+def read_RPICT3V1_PowerFactor(SensorID):
+    
+    global RPICT3V1_data
+
+    measurement = float(RPICT3V1_data[int(SensorLoc[SensorID])])
+    measurement = round(measurement, 3)
+    
+    logString = "Mains Electricity PowerFactor: " + str(measurement)
+    DebugLog (logString, 1, 1)
+    
+    return measurement
+
+def read_RPM_now(SensorID):
+	global RPM_now, Dist_m_today, prev_Dist_m_today
+	
+	if Dist_m_today == prev_Dist_m_today:
+		RPM_now = 0
+
+	measurement = RPM_now
+	prev_Dist_m_today = Dist_m_today
+	measurement = round(measurement, 3)
+	
+	logString = "RPM_now: " + str(measurement)
+	DebugLog (logString, 1, 1)
+	print(logString)
+    
+	return measurement
+
+def read_Dist_m(SensorID):
+	global RPM_now, Dist_m_today, prev_Dist_m_today
+	
+	measurement = Dist_m_today
+	measurement = round(measurement, 3)
+	
+	logString = "Dist_m: " + str(measurement)
+	DebugLog (logString, 1, 1)
+	print(logString)
+	
+	return measurement
+
+# Interrupt callback routine for RPM & Dist_m
+def RPM_pulse(channel):
+	global Dist_m_today, RPM_now, prev_RPM_Time
+	
+	Dist_m_today = Dist_m_today + 1
+	RPM_Time = time.time()
+	
+	# Reset daily total
+	if time.localtime(RPM_Time).tm_hour < time.localtime(prev_RPM_Time).tm_hour:
+		Dist_m_today = 0
+
+	if prev_RPM_Time > 0:
+		RPM_now = 60 / (RPM_Time - prev_RPM_Time) 
+	
+	prev_RPM_Time = RPM_Time
+	
+	DebugLog ("RPM gen pulse detected", 1, 1)
+		
 def read_sensor(SensorID):
 	measurement = -999
 
@@ -461,25 +644,49 @@ def read_sensor(SensorID):
 	if SensorType[SensorID] == 'SolarPV_W':
 		measurement = read_SolarPV_kW_gen_now(SensorID)
 		
+	if SensorType[SensorID] == 'RPM':
+		measurement = read_RPM_now(SensorID)
+		
+	if SensorType[SensorID] == 'Dist_m':
+		measurement = read_Dist_m(SensorID)
+		
+	# RPICT3V1_MainsElectricityVoltage must be read before any other RPICT3V1 sensors as it is the only function that reads the data set from the device
+	if SensorType[SensorID] == 'RPICT3V1_MainsElectricityVoltage':
+		measurement = read_RPICT3V1_MainsElectricityVoltage(SensorID)
+
+	if SensorType[SensorID] == 'RPICT3V1_SCT013_100A_1':
+		measurement = read_RPICT3V1_SCT013_100A_1(SensorID)
+
+	if SensorType[SensorID] == 'RPICT3V1_ActiveImport':
+		measurement = read_RPICT3V1_ActiveImport(SensorID)
+
+	if SensorType[SensorID] == 'RPICT3V1_ActiveExport':
+		measurement = read_RPICT3V1_ActiveExport(SensorID)
+
+	if SensorType[SensorID] == 'RPICT3V1_PowerFactor':
+		measurement = read_RPICT3V1_PowerFactor(SensorID)
+
+	#Apply gain / offset calculation
+	measurement = float(Sensor_A[SensorID]) * (measurement)**2 + float(Sensor_B[SensorID]) * measurement + float(Sensor_C[SensorID])
 
 	return measurement
 
 
 # 1-wire config...
 if 'T1w' in SensorType:
-	print("Using 1-Wire Temperature Sensor(s)")
+	if DebugLevel > 0: print("Using 1-Wire Temperature Sensor(s)")
 	os.system('modprobe w1-gpio')
 	os.system('modprobe w1-therm')
 	base_dir = '/sys/bus/w1/devices/'
 
 # LM75 config...
 if 'LM75' in SensorType:
-	print("Using LM75 Temperature Sensor(s)")
+	if DebugLevel > 0: print("Using LM75 Temperature Sensor(s)")
 	sensor = LM75.LM75()
 
 # TrigN config...
 if 'TrigN' in SensorType:
-	print("Using Negative-Edge trigger on pin")
+	if DebugLevel > 0: print("Using Negative-Edge trigger on pin")
 
 # SolarPV config...
 # Assumes the I/O pin is connected directly to the output of the photo detector stuck to the front of the electricity meter
@@ -488,20 +695,30 @@ if 'TrigN' in SensorType:
 if 'Electric_Whrs_import_today' in SensorType:
 	for x in range(0, ActiveSensors):
 		if SensorType[x] == 'Electric_Whrs_import_today':
+			if DebugLevel > 0: print("Using Electricity strobe monitor on pin ",SensorLoc[x])
 			GPIO.setup(int(SensorLoc[x],10), GPIO.IN, pull_up_down=GPIO.PUD_UP) # Add pull-up here only when testing without the photo-sensor attached
 			GPIO.add_event_detect(int(SensorLoc[x],10), GPIO.FALLING, callback=Electric_import_pulse, bouncetime=500)
 
 if 'SolarPV_Whrs_gen_today' in SensorType:
 	for x in range(0, ActiveSensors):
 		if SensorType[x] == 'SolarPV_Whrs_gen_today':
+			if DebugLevel > 0: print("Using SolarPV strobe monitor on pin ",SensorLoc[x])
 			GPIO.setup(int(SensorLoc[x],10), GPIO.IN) #, pull_up_down=GPIO.PUD_UP) # Add pull-up here only when testing without the photo-sensor attached
 			GPIO.add_event_detect(int(SensorLoc[x],10), GPIO.FALLING, callback=SolarPV_gen_pulse, bouncetime=500)
+
+if 'RPM' in SensorType:
+	for x in range(0, ActiveSensors):
+		if SensorType[x] == 'RPM':
+			if DebugLevel > 0: print("Using active low edge on pin ",SensorLoc[x])
+			GPIO.setup(int(SensorLoc[x],10), GPIO.IN) #, pull_up_down=GPIO.PUD_UP) # Add pull-up here only when testing without the photo-sensor attached
+			GPIO.add_event_detect(int(SensorLoc[x],10), GPIO.FALLING, callback=RPM_pulse, bouncetime=500)
 
 # Update LogTitlesString with description of all sensors...
 logTitleString = ""
 for x in range(0, ActiveSensors):
 	logTitleString = logTitleString + LogTitles[x] + ";"
-print (logTitleString)
+
+DebugLog (logTitleString, 0, 0)
 
 ############################################################
 # Main program loop
@@ -512,7 +729,7 @@ try:
 	print("Measurement Interval: ", MeasurementInterval)
 	print("Log Interval: ", LogInterval)
 	print("Display Interval: ", DisplayInterval)
-	print("Temperature data logger running...")
+	print("Multi-format data logger running...")
 
 	# Set first LogTime
 	NextLogTime = time.time() + LogInterval
@@ -533,7 +750,7 @@ try:
 		# Pause between measurements
 		while TimeNow < NextMeasurementTime:
 			# Check CPU throttle status while waiting...
-			#print ("Reading throttle...")
+			if DebugLevel > 2: print ("Reading throttle...")
 			ThrottleMonitor()
 			time.sleep(0.2)
 			TimeNow = time.time()
@@ -567,7 +784,7 @@ try:
 			# Check for low warning
 			if SensorReading[x] < LowWarning[x]:
 				if LowWarningIssued[x] == False:
-					logger.info('Low temperature warning')
+					if DebugLevel > -1: logger.info('Low warning!')
 					# Issue Warning via IFTTT...
 					#r = requests.post('https://maker.ifttt.com/trigger/Water_low_temp/with/key/' + IFTTT_KEY, params={"value1":"none","value2":"none","value3":"none"})
 					LowWarningIssued[x] = True
@@ -576,7 +793,7 @@ try:
 			# Check for high warning
 			if SensorReading[x] > HighWarning[x]:
 				if HighWarningIssued[x] == False:
-					logger.info('High temperature warning')
+					if DebugLevel > -1: logger.info('High warning!')
 					# Issue Warning via IFTTT...
 					#r = requests.post('https://maker.ifttt.com/trigger/Water_low_temp/with/key/' + IFTTT_KEY, params={"value1":"none","value2":"none","value3":"none"})
 					HighWarningIssued[x] = True
@@ -590,15 +807,15 @@ try:
 			logString = logString + str(SensorReading[x]) + ";"
 
 		# Print the result
-		print(logString)
+		if DebugLevel > 0: print(logString)
 		
 		# Write to log...
 		if LogInterval > 0:
-			NextLogTime = LogTemp(NextLogTime, logTitleString, logString, SensorReading)
+			NextLogTime = LogData(NextLogTime, logTitleString, logString, SensorReading)
 		
 		# Write to display...
 		if DisplayInterval > 0 and DisplaySensor1 >= 0:
-			NextDisplayTime = DisplayTemp(NextDisplayTime, SensorReading[DisplaySensor1], "c ")
+			NextDisplayTime = DisplayData(NextDisplayTime, SensorReading[DisplaySensor1], "c ")
 		
 		# NumReadings countdown...
 		if Reading < NumReadings:
@@ -606,15 +823,15 @@ try:
 			
 		prev_TimeNow = TimeNow
 	
-	logger.info('Logging completed.')
+	if LogLevel > 0: logger.info('Logging completed.')
 	
 # If you press CTRL+C, cleanup and stop
 except KeyboardInterrupt:
-	logger.info('Keyboard Interrupt (ctrl-c) detected - exiting program loop')
+	if LogLevel > 0: logger.info('Keyboard Interrupt (ctrl-c) detected - exiting program loop')
 	print("Keyboard Interrupt (ctrl-c) detected - exiting program loop")
 
 finally:
-	logger.info('Closing data logger')
+	if LogLevel > 0: logger.info('Closing data logger')
 	print("Closing data logger")
 
 	
