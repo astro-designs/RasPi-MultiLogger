@@ -288,7 +288,7 @@ def read_ping(SensorID):
 
 	out, err = res.communicate()
 
-	if "ttl=" in out:
+	if "ttl=" in str(out):
 		SensorReading[SensorID] = min(SensorReading[SensorID] + 1,100)
 	else:
 		SensorReading[SensorID] = max(SensorReading[SensorID] - 1,0)
