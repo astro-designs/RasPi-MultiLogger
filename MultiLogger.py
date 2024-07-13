@@ -86,7 +86,10 @@ logger.addHandler(hdlr)
 logger.setLevel(logging.INFO)
 
 # Setup serial
-ser = serial.Serial('/dev/ttyAMA0', 38400)
+try:
+    ser = serial.Serial('/dev/ttyAMA0', 38400)
+except:
+    ser = serial.Serial('/dev/ttyS0', 38400)
 
 # Miscellaneous definitions
 DailyReset = False
